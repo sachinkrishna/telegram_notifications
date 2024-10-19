@@ -48,6 +48,7 @@ def send_message_with_url_buttons(bot_token, chat_id, message, buttons):
     response = requests.post(url, json=payload)
 
     if response.status_code == 200:
+        print(payload)
         print('Message with URL buttons sent successfully!')
     else:
         print(f'Failed to send message. Status code: {response.status_code}')
