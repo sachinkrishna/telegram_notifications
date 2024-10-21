@@ -5,15 +5,12 @@ import queue
 import threading
 import time
 from fastapi.middleware.cors import CORSMiddleware
-
-
-# Define a simple queue for managing tasks
-message_queue = queue.Queue()
+from collections import defaultdict
 
 # Create the FastAPI app
 app = FastAPI()
 
-
+# Set up CORS middleware
 origins = ["*"]
 
 app.add_middleware(
@@ -23,6 +20,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Define a dictionary to store separate queues for each bot token
+message_queues = defaultdict(queue.Queue)
+
 # Define the message model for the POST request
 class Message(BaseModel):
     chat_id: str
@@ -54,11 +55,12 @@ def send_message_with_url_buttons(bot_token, chat_id, message, buttons):
         print(f'Failed to send message. Status code: {response.status_code}')
         print(response.text)
 
-# Background task to process the queue
-def message_sender_worker():
+# Background task to process the queue for each bot token
+def message_sender_worker(bot_token):
+    queue_for_bot = message_queues[bot_token]
     while True:
-        if not message_queue.empty():
-            task = message_queue.get()
+        if not queue_for_bot.empty():
+            task = queue_for_bot.get()
             try:
                 send_message_with_url_buttons(
                     task["bot_token"],
@@ -68,26 +70,32 @@ def message_sender_worker():
                 )
                 time.sleep(0.1)  # Sleep for 0.1 seconds to comply with rate limit (10 messages per second)
             except Exception as e:
-                print(f"Error sending message: {e}")
+                print(f"Error sending message for bot {bot_token}: {e}")
             finally:
-                message_queue.task_done()
+                queue_for_bot.task_done()
         else:
             time.sleep(0.5)
 
-# Start the background worker thread
-threading.Thread(target=message_sender_worker, daemon=True).start()
+# Function to start a worker thread for each new bot token
+def start_worker_for_bot(bot_token):
+    if bot_token not in message_queues:
+        # Start a new worker thread for this bot token
+        threading.Thread(target=message_sender_worker, args=(bot_token,), daemon=True).start()
 
 # FastAPI endpoint to send a message
 @app.post("/send_message/")
 async def send_message_endpoint(msg: Message, x_bot_token: str = Header(...)):
-    # Add the message to the queue
+    # Ensure the worker for this bot token is running
+    start_worker_for_bot(x_bot_token)
+
+    # Add the message to the queue for the specific bot token
     task = {
         "bot_token": x_bot_token,
         "chat_id": msg.chat_id,
         "message": msg.message,
         "buttons": msg.buttons
     }
-    message_queue.put(task)
+    message_queues[x_bot_token].put(task)
     return {"status": "Message added to queue"}
 
 # Run the FastAPI app
